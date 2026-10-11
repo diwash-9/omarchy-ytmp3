@@ -26,7 +26,7 @@ jobs:
           chmod 0440 /etc/sudoers.d/builder
 
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Pin release checksum
         working-directory: packaging/omarchy-ytmp3
@@ -41,16 +41,16 @@ jobs:
         run: |
           chown -R builder:builder .
           sudo -u builder makepkg --noconfirm --nodeps
-          makepkg --printsrcinfo > .SRCINFO
+          sudo -u builder sh -c 'makepkg --printsrcinfo > .SRCINFO'
 
       - name: Upload built package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: package
           path: packaging/omarchy-ytmp3/*.pkg.tar.zst
 
       - name: Upload AUR files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aur
           path: |
@@ -64,13 +64,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download built package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: package
           path: dist
 
       - name: Create release with package attached
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: dist/*.pkg.tar.zst
@@ -85,12 +85,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download AUR files
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: aur
 
       - name: Deploy to AUR
-        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
+        uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
         with:
           pkgname: omarchy-ytmp3
           pkgbuild: PKGBUILD
