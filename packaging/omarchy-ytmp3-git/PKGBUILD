@@ -1,0 +1,47 @@
+# Maintainer: Diwash <https://github.com/diwash-9>
+pkgname=omarchy-ytmp3-git
+pkgver=r1.0000000
+pkgrel=1
+pkgdesc='Download YouTube videos and playlists as MP3/MP4 from the Omarchy launcher or CLI (git)'
+arch=('any')
+url='https://github.com/diwash-9/omarchy-ytmp3'
+license=('MIT')
+depends=('bash' 'yt-dlp' 'ffmpeg')
+optdepends=(
+  'wl-clipboard: read the copied URL from the clipboard in the launcher'
+  'gum: terminal fallback menus when the Omarchy menu helpers are unavailable'
+)
+makedepends=('git')
+conflicts=('omarchy-ytmp3')
+provides=('omarchy-ytmp3')
+options=('!strip' '!debug')
+install=omarchy-ytmp3.install
+source=('omarchy-ytmp3::git+https://github.com/diwash-9/omarchy-ytmp3.git')
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$srcdir/omarchy-ytmp3"
+  printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+package() {
+  install -Dm755 "$srcdir/omarchy-ytmp3/bin/ytmp3" \
+    "$pkgdir/usr/bin/ytmp3"
+  install -Dm755 "$srcdir/omarchy-ytmp3/bin/ytmp3-prompt" \
+    "$pkgdir/usr/bin/ytmp3-prompt"
+  install -Dm644 "$srcdir/omarchy-ytmp3/lib/common.sh" \
+    "$pkgdir/usr/lib/omarchy-ytmp3/common.sh"
+  install -Dm644 "$srcdir/omarchy-ytmp3/desktop/omarchy-ytmp3.desktop" \
+    "$pkgdir/usr/share/applications/omarchy-ytmp3.desktop"
+  install -Dm644 "$srcdir/omarchy-ytmp3/icons/omarchy-ytmp3.svg" \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/omarchy-ytmp3.svg"
+  for size in 16 24 32 48 64 128 256 512; do
+    install -Dm644 \
+      "$srcdir/omarchy-ytmp3/icons/hicolor/${size}x${size}/apps/omarchy-ytmp3.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/omarchy-ytmp3.png"
+  done
+  install -Dm644 "$srcdir/omarchy-ytmp3/README.md" \
+    "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 "$srcdir/omarchy-ytmp3/LICENSE" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

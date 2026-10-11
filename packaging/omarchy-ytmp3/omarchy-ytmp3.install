@@ -1,0 +1,27 @@
+post_install() {
+  cat <<'EOF'
+==> omarchy-ytmp3 installed.
+
+Command line:
+  ytmp3 "<url>" [--format mp3|mp4] [--dir DIR]
+
+Launcher (optional): bind it to a key by adding this line to
+  ~/.config/hypr/bindings.lua
+
+  o.bind("SUPER + Y", "YT to MP3", "ytmp3-prompt")
+
+then apply it with:
+
+  hyprctl reload
+
+It is also available from the app launcher as "YT to MP3".
+EOF
+}
+
+post_upgrade() {
+  post_install
+}
+
+pre_remove() {
+  echo "==> omarchy-ytmp3 removed. Your media and the Super+Y bind were left untouched."
+}

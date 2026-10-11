@@ -1,0 +1,18 @@
+# Build/package artifacts
+pkg/
+src/
+*.pkg.tar.zst
+*.pkg.tar.xz
+*.pkg.tar.*
+makepkg-output/
+
+# Editor / OS noise
+*.swp
+*~
+.DS_Store
+.idea/
+.vscode/
+
+# Local scratch
+/tmp/
+*.log

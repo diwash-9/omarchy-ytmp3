@@ -1,0 +1,19 @@
+pkgbase = omarchy-ytmp3
+	pkgdesc = Download YouTube videos and playlists as MP3/MP4 from the Omarchy launcher or CLI
+	pkgver = 2.0.0
+	pkgrel = 1
+	url = https://github.com/diwash-9/omarchy-ytmp3
+	install = omarchy-ytmp3.install
+	arch = any
+	license = MIT
+	depends = bash
+	depends = yt-dlp
+	depends = ffmpeg
+	optdepends = wl-clipboard: read the copied URL from the clipboard in the launcher
+	optdepends = gum: terminal fallback menus when the Omarchy menu helpers are unavailable
+	options = !strip
+	options = !debug
+	source = omarchy-ytmp3-2.0.0.tar.gz::https://github.com/diwash-9/omarchy-ytmp3/archive/refs/tags/v2.0.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = omarchy-ytmp3

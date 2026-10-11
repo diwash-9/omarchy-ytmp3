@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# ytmp3-prompt - Omarchy launcher entry for ytmp3.
+#
+# Flow: URL (arg > clipboard > prompt) -> format (mp3/mp4) -> folder -> download.
+# No browser needed: copy a link, press Super+Y, pick format + folder, done.
+#
+# Part of omarchy-ytmp3 <https://github.com/diwash-9/omarchy-ytmp3>.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+# --- locate the shared helper library (installed or repo checkout) ------------
+YTMP3_LIB=""
+for cand in \
+  "${YTMP3_LIB:-}" \
+  "/usr/lib/omarchy-ytmp3/common.sh" \
+  "${HOME}/.local/lib/omarchy-ytmp3/common.sh" \
+  "$SCRIPT_DIR/../lib/common.sh" \
+  "$SCRIPT_DIR/lib/common.sh"; do
+  if [[ -n "$cand" && -r "$cand" ]]; then YTMP3_LIB="$cand"; break; fi
+done
+if [[ -z "$YTMP3_LIB" ]]; then
+  printf 'ytmp3-prompt: cannot locate common.sh; please reinstall omarchy-ytmp3\n' >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "$YTMP3_LIB"
+
+MP3_ROOT="${YTMP3_DIR:-$HOME/Music/YT}"
+MP4_ROOT="${YTMP4_DIR:-$HOME/Videos/YT}"
+
+# Locate the ytmp3 binary: installed first, then a repo checkout.
+YTMP3_BIN=""
+for cand in \
+  "$(command -v ytmp3 2>/dev/null || true)" \
+  "$SCRIPT_DIR/ytmp3" \
+  "$SCRIPT_DIR/../bin/ytmp3"; do
+  if [[ -n "$cand" && -x "$cand" ]]; then YTMP3_BIN="$cand"; break; fi
+done
+if [[ -z "$YTMP3_BIN" ]]; then
+  printf 'error: ytmp3 binary not found; install omarchy-ytmp3 first\n' >&2
+  notify critical "ytmp3: not installed" "Install omarchy-ytmp3 first."
+  exit 1
+fi
+
+# --- resolve the URL ----------------------------------------------------------
+clipboard_url() {
+  local clip=""
+  if have wl-paste; then
+    # -n strips the trailing newline; fall back plainly if unsupported.
+    clip="$(wl-paste -n 2>/dev/null || wl-paste 2>/dev/null || true)"
+  fi
+  clip="$(trim "$clip")"
+  if is_youtube_url "$clip"; then
+    printf '%s' "$clip"
+  fi
+}
+
+URL="${1:-}"
+[[ -n "$URL" ]] || URL="$(clipboard_url || true)"
+
+if [[ -z "$URL" ]]; then
+  if have omarchy-menu-input; then
+    if ! URL="$(omarchy-menu-input "Paste YouTube link (video or playlist)" --width 600)"; then
+      exit 0 # user cancelled
+    fi
+  else
+    # Terminal fallback (e.g. SSH): read from stdin.
+    printf 'YouTube URL: ' >&2
+    IFS= read -r URL || exit 0
+  fi
+fi
+
+URL="$(trim "$URL")"
+if ! is_youtube_url "$URL"; then
+  notify critical "ytmp3: not a YouTube URL" "$URL"
+  printf 'error: not a YouTube URL: %s\n' "$URL" >&2
+  exit 2
+fi
+
+# --- interactive pickers (Omarchy menu when available, terminal fallback) -----
+menu_select() {
+  # menu_select <prompt> <option...>: prints the chosen option; fails on cancel.
+  local prompt="$1"; shift
+  if have omarchy-menu-select; then
+    omarchy-menu-select "$prompt" "$@" -- --width 550
+  elif have gum; then
+    gum choose --header "$prompt" "$@"
+  else
+    local opt sel
+    printf '%s\n' "$prompt" >&2
+    select opt in "$@"; do sel="$opt"; break; done
+    [[ -n "${sel:-}" ]] || return 1
+    printf '%s' "$sel"
+  fi
+}
+
+menu_input() {
+  # menu_input <prompt>: prints typed text; fails on cancel/empty.
+  local prompt="$1" ans
+  if have omarchy-menu-input; then
+    ans="$(omarchy-menu-input "$prompt" --width 550)" || return 1
+  elif have gum; then
+    ans="$(gum input --header "$prompt")" || return 1
+  else
+    printf '%s: ' "$prompt" >&2
+    IFS= read -r ans || return 1
+  fi
+  [[ -n "${ans//[[:space:]]/}" ]] || return 1
+  printf '%s' "$ans"
+}
+
+ask_format() {
+  # Prints mp3|mp4; fails on cancel.
+  local choice
+  choice="$(menu_select "Format" "MP3 — audio only" "MP4 — video, high quality")" || return 1
+  case "$choice" in
+    MP4*) printf 'mp4' ;;
+    *) printf 'mp3' ;;
+  esac
+}
+
+safe_join() {
+  # safe_join <root> <name>: prints $root/$name resolved; fails if it escapes root.
+  local root="$1" name="$2" clean resolved root_real
+  clean="$(printf '%s' "$name" | tr -d '\r\n\t' | sed -e 's/^[[:space:]/]*//' -e 's#[[:space:]/]*$##')"
+  [[ -n "$clean" ]] || return 1
+  resolved="$(realpath -m "$root/$clean")"
+  root_real="$(realpath -m "$root")"
+  [[ "$resolved" == "$root_real"/* ]] || return 1
+  printf '%s' "$resolved"
+}
+
+ask_dir() {
+  # ask_dir <root>: prints the chosen download folder; fails on cancel.
+  local root="$1" choice name picked
+  mkdir -p "$root"
+
+  local subs=()
+  while IFS= read -r d; do
+    [[ -n "$d" ]] || continue
+    subs+=("$d")
+  done < <(find "$root" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sed 's/\t/ /g' | sort -f)
+
+  local NEW_LABEL="＋ New folder..."
+  local BROWSE_LABEL="🔍 Choose anywhere else..."
+  if ((${#subs[@]} > 0)); then
+    choice="$(menu_select "Save to folder (in $root)" "${subs[@]}" "$NEW_LABEL" "$BROWSE_LABEL")" || return 1
+  else
+    choice="$(menu_select "Save to folder (in $root)" "$NEW_LABEL" "$BROWSE_LABEL")" || return 1
+  fi
+
+  case "$choice" in
+    "$NEW_LABEL")
+      name="$(menu_input "New folder name (e.g. Nepali/Pop)")" || return 1
+      picked="$(safe_join "$root" "$name")" || {
+        notify critical "ytmp3: bad folder name" "$name"
+        return 1
+      }
+      mkdir -p "$picked"
+      printf '%s' "$picked"
+      ;;
+    "$BROWSE_LABEL")
+      if have omarchy-file-select; then
+        picked="$(omarchy-file-select --title "Save downloads here" --directory)" || return 1
+      else
+        picked="$(menu_input "Full folder path")" || return 1
+      fi
+      picked="$(trim "$picked")"
+      [[ -n "$picked" ]] || return 1
+      mkdir -p "$picked"
+      printf '%s' "$picked"
+      ;;
+    *)
+      picked="$(safe_join "$root" "$choice")" || return 1
+      printf '%s' "$picked"
+      ;;
+  esac
+}
+
+FORMAT="$(ask_format)" || exit 0 # user cancelled
+if [[ "$FORMAT" == "mp4" ]]; then
+  ROOT="$MP4_ROOT"
+else
+  ROOT="$MP3_ROOT"
+fi
+OUT_DIR="$(ask_dir "$ROOT")" || exit 0 # user cancelled
+
+# Run detached from the menu so the OSD/notification can update while the menu
+# closes. In a terminal, run in the foreground so progress is visible.
+if [[ -t 1 ]]; then
+  exec "$YTMP3_BIN" --format "$FORMAT" --dir "$OUT_DIR" "$URL"
+else
+  setsid "$YTMP3_BIN" --format "$FORMAT" --dir "$OUT_DIR" "$URL" \
+    >/dev/null 2>&1 </dev/null &
+  disown || true
+  exit 0
+fi

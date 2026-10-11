@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+# ytmp3 - download a YouTube video or playlist as MP3 audio or high-quality MP4.
+#
+# Part of omarchy-ytmp3 <https://github.com/diwash-9/omarchy-ytmp3>.
+# Uses yt-dlp for extraction and ffmpeg for local conversion.
+# Personal use only: download and keep only content you have the right to.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+# --- locate the shared helper library (installed or repo checkout) ------------
+YTMP3_LIB=""
+for cand in \
+  "${YTMP3_LIB:-}" \
+  "/usr/lib/omarchy-ytmp3/common.sh" \
+  "${HOME}/.local/lib/omarchy-ytmp3/common.sh" \
+  "$SCRIPT_DIR/../lib/common.sh" \
+  "$SCRIPT_DIR/lib/common.sh"; do
+  if [[ -n "$cand" && -r "$cand" ]]; then YTMP3_LIB="$cand"; break; fi
+done
+if [[ -z "$YTMP3_LIB" ]]; then
+  printf 'ytmp3: cannot locate common.sh; please reinstall omarchy-ytmp3\n' >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "$YTMP3_LIB"
+
+DEFAULT_MP3_DIR="$HOME/Music/YT"
+DEFAULT_MP4_DIR="$HOME/Videos/YT"
+DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-ytmp3"
+
+usage() {
+  cat <<EOF
+ytmp3 $YTMP3_VERSION - YouTube -> MP3 / MP4 for personal use
+
+Usage:
+  ytmp3 <url> [options]
+
+Arguments:
+  <url>                YouTube video, short, youtu.be, music.youtube.com or
+                       playlist URL
+
+Options:
+  --format mp3|mp4     Output format (default: mp3)
+  --mp3, --mp4         Shorthand for --format
+  --dir DIR            Output directory. Defaults:
+                         mp3: \$YTMP3_DIR or ~/Music/YT
+                         mp4: \$YTMP4_DIR or ~/Videos/YT
+  --playlist           Force playlist mode (one file per entry)
+  --no-playlist        Force single-video mode (default for watch/shorts links)
+  --version            Print version and exit
+  -h, --help           Show this help and exit
+
+Examples:
+  ytmp3 "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+  ytmp3 "https://youtu.be/dQw4w9WgXcQ" --mp4 --dir ~/Videos/Concerts
+  ytmp3 "https://www.youtube.com/playlist?list=PLxxxx" --dir ~/Music/YT/Nepali-Pop
+
+Output:
+  Single video:  <dir>/<title>.<ext>
+  Playlist:      <dir>/<playlist title>/<NN> - <title>.<ext>
+  Metadata and thumbnail cover art are embedded.
+EOF
+}
+
+# --- argument parsing ---------------------------------------------------------
+URL=""
+OUT_DIR=""
+OUT_DIR_GIVEN=false
+FORMAT="mp3"
+PLAYLIST_MODE="auto" # auto | force-playlist | force-single
+
+while (($# > 0)); do
+  case "$1" in
+    -h|--help)
+      usage; exit 0 ;;
+    --version)
+      printf 'ytmp3 %s\n' "$YTMP3_VERSION"; exit 0 ;;
+    --dir)
+      [[ $# -ge 2 ]] || { log "error: --dir requires a value"; exit 2; }
+      OUT_DIR="$2"; OUT_DIR_GIVEN=true; shift 2 ;;
+    --dir=*)
+      OUT_DIR="${1#--dir=}"; OUT_DIR_GIVEN=true; shift ;;
+    --format)
+      [[ $# -ge 2 ]] || { log "error: --format requires a value"; exit 2; }
+      FORMAT="$2"; shift 2 ;;
+    --format=*)
+      FORMAT="${1#--format=}"; shift ;;
+    --mp3)
+      FORMAT="mp3"; shift ;;
+    --mp4)
+      FORMAT="mp4"; shift ;;
+    --playlist)
+      PLAYLIST_MODE="force-playlist"; shift ;;
+    --no-playlist)
+      PLAYLIST_MODE="force-single"; shift ;;
+    --)
+      shift; break ;;
+    -*)
+      log "error: unknown option: $1"; usage >&2; exit 2 ;;
+    *)
+      if [[ -z "$URL" ]]; then URL="$1"; else log "error: only one URL may be given"; exit 2; fi
+      shift ;;
+  esac
+done
+
+FORMAT="$(printf '%s' "$FORMAT" | tr '[:upper:]' '[:lower:]')"
+if [[ "$FORMAT" != "mp3" && "$FORMAT" != "mp4" ]]; then
+  log "error: --format must be mp3 or mp4 (got: $FORMAT)"
+  exit 2
+fi
+
+if [[ -z "$URL" ]]; then
+  usage >&2
+  exit 2
+fi
+
+URL="$(trim "$URL")"
+if ! is_youtube_url "$URL"; then
+  log "error: not a YouTube URL: $URL"
+  notify critical "ytmp3: not a YouTube URL" "$URL"
+  exit 2
+fi
+
+# Default output directory depends on the format; --dir and env always win.
+if ! $OUT_DIR_GIVEN; then
+  if [[ "$FORMAT" == "mp4" ]]; then
+    OUT_DIR="${YTMP4_DIR:-$DEFAULT_MP4_DIR}"
+  else
+    OUT_DIR="${YTMP3_DIR:-$DEFAULT_MP3_DIR}"
+  fi
+fi
+
+need_cmd yt-dlp
+need_cmd ffmpeg
+mkdir -p "$OUT_DIR"
+
+# --- playlist vs single -------------------------------------------------------
+case "$PLAYLIST_MODE" in
+  force-playlist)
+    PLAYLIST_FLAG="--yes-playlist"; MODE_LABEL="playlist" ;;
+  force-single)
+    PLAYLIST_FLAG="--no-playlist"; MODE_LABEL="single" ;;
+  auto)
+    if [[ "$URL" =~ /(playlist|mix)([/?#]|$) ]]; then
+      PLAYLIST_FLAG="--yes-playlist"; MODE_LABEL="playlist"
+    else
+      PLAYLIST_FLAG="--no-playlist"; MODE_LABEL="single"
+    fi
+    ;;
+esac
+
+if [[ "$PLAYLIST_FLAG" == "--yes-playlist" ]]; then
+  OUT_TMPL="$OUT_DIR/%(playlist_title)s/%(playlist_index)s - %(title)s.%(ext)s"
+else
+  OUT_TMPL="$OUT_DIR/%(title)s.%(ext)s"
+fi
+
+mkdir -p "$DATA_ROOT"
+printf '%s %s %s %s -> %s\n' \
+  "$(date -Is)" "$MODE_LABEL" "$FORMAT" "$URL" "$OUT_DIR" \
+  >> "$DATA_ROOT/history.log"
+
+# --- yt-dlp arguments ---------------------------------------------------------
+if [[ "$FORMAT" == "mp4" ]]; then
+  KIND="MP4 video"
+  FORMAT_ARGS=(
+    -f "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b"
+    --merge-output-format mp4
+    --embed-metadata --embed-thumbnail --convert-thumbnails jpg
+  )
+else
+  KIND="MP3 audio"
+  FORMAT_ARGS=(
+    -x --audio-format mp3 --audio-quality 0
+    --embed-metadata --embed-thumbnail --convert-thumbnails jpg
+  )
+fi
+
+YTDLP_ARGS=(
+  "$PLAYLIST_FLAG"
+  "${FORMAT_ARGS[@]}"
+  --restrict-filenames
+  --no-mtime
+  --continue --retries 10 --fragment-retries 10
+  --newline --progress
+  -o "$OUT_TMPL"
+  -- "$URL"
+)
+
+log "ytmp3: downloading $KIND ($MODE_LABEL) -> $OUT_DIR"
+notify low "ytmp3: downloading $KIND" "Saving to $OUT_DIR"
+osd 0 "Starting $FORMAT download"
+
+TMPLOG="$(mktemp)"
+trap 'rm -f "$TMPLOG"' EXIT
+
+if [[ -t 1 ]]; then
+  # Interactive: let yt-dlp draw its own progress bar.
+  if yt-dlp "${YTDLP_ARGS[@]}"; then
+    notify low "ytmp3: done" "Saved to $OUT_DIR"
+    log "ytmp3: done -> $OUT_DIR"
+  else
+    rc=$?
+    notify critical "ytmp3: download failed" "Check the URL and your connection."
+    log "error: yt-dlp exited with $rc"
+    exit "$rc"
+  fi
+else
+  # Launched from the menu/shortcut: parse progress and drive the Omarchy OSD.
+  LAST_PCT=0
+  rc=0
+  stdbuf -oL -eL yt-dlp "${YTDLP_ARGS[@]}" 2>&1 | tee "$TMPLOG" | \
+    while IFS= read -r line; do
+      if [[ "$line" =~ \[download\][[:space:]]+([0-9]+(\.[0-9]+)?)% ]]; then
+        pct="${BASH_REMATCH[1]%.*}"
+        if [[ "$pct" != "$LAST_PCT" ]]; then
+          LAST_PCT="$pct"
+          osd "$pct" "Downloading $FORMAT"
+        fi
+      fi
+      printf '%s\n' "$line" >&2
+    done || rc=$?
+
+  if (( rc == 0 )); then
+    count="$(grep -cE '\[ExtractAudio\]|\[Merger\]|Destination: .*\.(mp3|mp4)' "$TMPLOG" || true)"
+    osd 100 "Done"
+    notify low "ytmp3: done ($FORMAT)" "Saved to $OUT_DIR"
+    log "ytmp3: done -> $OUT_DIR ($count file(s))"
+  else
+    notify critical "ytmp3: download failed" "Check the URL and your connection."
+    log "error: yt-dlp exited with $rc"
+    exit "$rc"
+  fi
+fi

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=YT to MP3
+GenericName=YouTube Downloader
+Comment=Download a YouTube video or playlist as MP3/MP4 — no browser needed
+Exec=ytmp3-prompt
+Icon=omarchy-ytmp3
+Terminal=false
+Categories=AudioVideo;Audio;Network;
+Keywords=youtube;mp3;mp4;download;music;video;yt-dlp;
+StartupNotify=false
